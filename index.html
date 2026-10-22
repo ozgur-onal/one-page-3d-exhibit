@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>One-Page 3D Exhibit</title>
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@4.4.0/dist/model-viewer.min.js"></script>
+  <script src="https://unpkg.com/scrollama@3.2.0/build/scrollama.min.js"></script>
+  <script src="exhibit.js?v=20261015d"></script>
+  <style>html,body{margin:0;background:#000}</style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    var app = document.getElementById("app");
+    var params = new URLSearchParams(location.search);
+    if (params.get("draft")) {
+      // Editor "Publish": the exhibit the editor stored in this browser
+      try {
+        var p = JSON.parse(localStorage.getItem("exh-published"));
+        document.title = p.data.title || document.title;
+        renderExhibit(app, p.data, { modelSrc: p.modelSrc });
+      } catch (e) {
+        app.textContent = "No published draft found in this browser. Open the editor and press Publish.";
+      }
+    } else {
+      var url = params.get("data");
+      if (!url) {
+        // No exhibit asked for: show the published demo instead of an empty page.
+        location.replace("demo.html");
+      } else {
+        fetch(url)
+          .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then(function (d) { document.title = d.title || document.title; renderExhibit(app, d); })
+          .catch(function (e) {
+            app.textContent = "Could not load " + url + " (" + e.message + "). Serve this folder over http(s); file:// blocks the data file.";
+          });
+      }
+    }
+  </script>
+</body>
+</html>

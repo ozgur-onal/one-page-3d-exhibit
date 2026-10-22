@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Demo exhibit: Two faces of an Attic amphora</title>
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@4.4.0/dist/model-viewer.min.js"></script>
+  <script src="https://unpkg.com/scrollama@3.2.0/build/scrollama.min.js"></script>
+  <script src="exhibit.js?v=20261015d"></script>
+  <script src="demo-exhibit.js?v=20261015d"></script>
+  <style>
+    html,body{margin:0;background:#000}
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    renderExhibit(document.getElementById("app"), window.DEMO_EXHIBIT);
+  </script>
+</body>
+</html>

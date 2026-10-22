@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>One-Page 3D Exhibit Editor</title>
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@4.4.0/dist/model-viewer.min.js"></script>
+  <script src="https://unpkg.com/scrollama@3.2.0/build/scrollama.min.js"></script>
+  <script src="exhibit.js?v=20261015d"></script>
+  <script src="demo-exhibit.js?v=20261015d"></script>
+  <style>
+    body{margin:0;font:15px/1.5 system-ui,sans-serif}
+    header{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;padding:.6rem 1rem;border-bottom:1px solid #ccc}
+    header input[type=text]{padding:.35rem;min-width:11rem}
+    main{display:grid;grid-template-columns:1fr 1fr;height:calc(100vh - 5.2rem)}
+    #ed{width:100%;height:100%;background:#000;--progress-bar-color:#c9b27c}
+    #rows{overflow:auto;padding:1rem}
+    .row{border:1px solid #ccc;border-radius:6px;padding:.6rem;margin-bottom:.8rem;display:grid;gap:.4rem}
+    .row textarea{width:100%;min-height:4.5rem;font:inherit;box-sizing:border-box}
+    .bar{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+    .ok{color:#0a6b2c}.no{color:#a3001f}
+    .armed{background:#ffe9b3}
+    #preview{position:fixed;inset:0;background:#000;overflow:auto;z-index:10;display:none}
+    #close{position:fixed;top:.6rem;right:.6rem;z-index:11;display:none}
+    @media(max-width:760px){main{grid-template-columns:1fr;grid-template-rows:45vh 1fr;height:calc(100vh - 8rem)}}
+  </style>
+</head>
+<body>
+  <header>
+    <input id="title" type="text" placeholder="Exhibit title" aria-label="Exhibit title">
+    <input id="src" type="text" placeholder="Model URL or path (.glb)" aria-label="Model URL or path">
+    <input id="credit" type="text" placeholder="Credit / attribution" aria-label="Credit or attribution">
+    <label>Local GLB <input id="file" type="file" accept=".glb"></label>
+    <button id="demo" type="button">Load Demo</button>
+    <button id="reset" type="button">Reset exhibition</button>
+    <button id="load" type="button">Load JSON</button>
+    <input id="jsonfile" type="file" accept=".json" hidden>
+    <button id="save" type="button">Save JSON</button>
+    <button id="publish" type="button">Publish</button>
+  </header>
+  <main>
+    <model-viewer id="ed" camera-controls interaction-prompt="none" alt="Model being edited"></model-viewer>
+    <section id="rows" aria-label="Steps">
+      <div id="list"></div>
+      <button id="add" type="button">Add step</button>
+    </section>
+  </main>
+  <div id="preview"></div>
+  <button id="close" type="button">Close preview</button>
+  <script>
+    var DEMO = window.DEMO_EXHIBIT;
+    var data = { title: "", credit: "", model: { src: "", alt: "" }, steps: [] };
+    var localUrl = null, handle = null;
+    var $ = function (id) { return document.getElementById(id); };
+    var mv = $("ed");
+
+    function h(tag, props, kids) {
+      var n = document.createElement(tag);
+      Object.keys(props || {}).forEach(function (k) { n[k] = props[k]; });
+      (kids || []).forEach(function (c) { n.appendChild(typeof c === "string" ? document.createTextNode(c) : c); });
+      return n;
+    }
+    function opt(v, t) { return h("option", { value: v, textContent: t }); }
+    function clone(o) { return JSON.parse(JSON.stringify(o)); }
+    function store() { try { localStorage.setItem("exh-draft", JSON.stringify(data)); } catch (e) {} }
+    function isUrl(s) { return /^https?:\/\//.test(s); }
+    function sameAsDemo() { return JSON.stringify(data) === JSON.stringify(DEMO); }
+
+    // Two-step confirmation without a modal dialog: the first click arms the button, the second runs it.
+    function confirmThen(btn, needsConfirm, armedLabel, fn) {
+      if (!needsConfirm || btn.dataset.armed) { disarm(btn); fn(); return; }
+      btn.dataset.armed = "1";
+      btn.dataset.label = btn.textContent;
+      btn.textContent = armedLabel;
+      btn.classList.add("armed");
+      setTimeout(function () { disarm(btn); }, 4000);
+    }
+    function disarm(btn) {
+      if (!btn.dataset.armed) return;
+      delete btn.dataset.armed;
+      btn.textContent = btn.dataset.label;
+      btn.classList.remove("armed");
+    }
+
+    // Attribute, not property: the custom element may not be upgraded yet when this runs at page load.
+    function setModel(src) { mv.setAttribute("src", src || DEMO.model.src); }
+
+    function readCam() {
+      var o = mv.getCameraOrbit(), t = mv.getCameraTarget();
+      return {
+        orbit: o.theta.toFixed(4) + "rad " + o.phi.toFixed(4) + "rad " + o.radius.toFixed(4) + "m",
+        target: t.x.toFixed(4) + "m " + t.y.toFixed(4) + "m " + t.z.toFixed(4) + "m",
+        fov: mv.getFieldOfView().toFixed(1) + "deg"
+      };
+    }
+    function move(i, d) {
+      var j = i + d;
+      if (j < 0 || j >= data.steps.length) return;
+      var t = data.steps[i]; data.steps[i] = data.steps[j]; data.steps[j] = t;
+      store(); render();
+    }
+    function render() {
+      var list = $("list");
+      list.innerHTML = "";
+      data.steps.forEach(function (s, i) {
+        var ta = h("textarea", { value: s.text || "", placeholder: "Text for this step" });
+        ta.setAttribute("aria-label", "Text, step " + (i + 1));
+        ta.oninput = function () { s.text = ta.value; store(); };
+        var ev = h("select", {}, [opt("", "Evidence label"), opt("documented", "Documented"), opt("inferred", "Inferred"), opt("speculative", "Speculative")]);
+        ev.value = s.evidence || "";
+        ev.onchange = function () { s.evidence = ev.value; store(); };
+        var so = h("input", { type: "text", value: s.source || "", placeholder: "Source anchor (document, page)" });
+        so.oninput = function () { s.source = so.value; store(); };
+        var reg = h("button", { type: "button", textContent: "Register 3D view" });
+        reg.onclick = function () { s.camera = readCam(); store(); render(); };
+        var go = h("button", { type: "button", textContent: "Show view", disabled: !s.camera });
+        go.onclick = function () { applyCamera(mv, s.camera, false); };
+        var up = h("button", { type: "button", textContent: "Up" });
+        up.onclick = function () { move(i, -1); };
+        var dn = h("button", { type: "button", textContent: "Down" });
+        dn.onclick = function () { move(i, 1); };
+        var del = h("button", { type: "button", textContent: "Delete" });
+        del.onclick = function () { data.steps.splice(i, 1); store(); render(); };
+        list.appendChild(h("div", { className: "row" }, [
+          h("strong", { textContent: "Step " + (i + 1) }),
+          ta,
+          h("div", { className: "bar" }, [ev, so]),
+          h("div", { className: "bar" }, [
+            reg, go,
+            h("span", { className: s.camera ? "ok" : "no", textContent: s.camera ? "3D view registered" : "No 3D view yet" }),
+            up, dn, del
+          ])
+        ]));
+      });
+    }
+
+    // Older drafts and files used "stops"; the data key is "steps" now.
+    function hasSteps(d) { return !!d && Array.isArray(d.steps || d.stops); }
+    function norm(d) {
+      var o = clone(d);
+      if (!o.steps) o.steps = o.stops || [];
+      delete o.stops;
+      return o;
+    }
+
+    // Replace the whole exhibition (Load Demo, Reset, Load JSON, first open).
+    function applyData(d) {
+      data = norm(d);
+      data.model = data.model || { src: "", alt: "" };
+      data.credit = data.credit || "";
+      if (localUrl) { URL.revokeObjectURL(localUrl); localUrl = null; }
+      $("title").value = data.title || "";
+      $("src").value = data.model.src || "";
+      $("credit").value = data.credit;
+      setModel(data.model.src);
+      store();
+      render();
+    }
+
+    function download(name, text) {
+      var a = h("a", { href: URL.createObjectURL(new Blob([text], { type: "application/json" })), download: name });
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    function exportJson() { download("exhibit.json", JSON.stringify(data, null, 2)); }
+    function showOverlay(modelSrc) {
+      $("preview").style.display = "block";
+      $("close").style.display = "block";
+      handle = renderExhibit($("preview"), data, { modelSrc: modelSrc });
+    }
+    function closePreview() {
+      if (handle) handle.destroy();
+      handle = null;
+      $("preview").style.display = "none";
+      $("close").style.display = "none";
+    }
+
+    $("title").oninput = function () { data.title = this.value; store(); };
+    $("credit").oninput = function () { data.credit = this.value; store(); };
+    $("src").onchange = function () {
+      data.model.src = this.value;
+      if (localUrl) { URL.revokeObjectURL(localUrl); localUrl = null; }
+      setModel(this.value);
+      store();
+    };
+    $("file").onchange = function () {
+      var f = this.files[0];
+      if (!f) return;
+      if (localUrl) URL.revokeObjectURL(localUrl);
+      localUrl = URL.createObjectURL(f);
+      setModel(localUrl);
+      data.model.src = f.name; $("src").value = f.name;
+      store();
+    };
+    $("add").onclick = function () {
+      data.steps.push({ text: "", evidence: "", source: "", camera: null });
+      store(); render();
+      var t = $("list").querySelectorAll("textarea");
+      t[t.length - 1].focus();
+    };
+    $("demo").onclick = function () {
+      confirmThen(this, !sameAsDemo() && data.steps.length > 0, "Replace current exhibition? Click again", function () { applyData(DEMO); });
+    };
+    $("reset").onclick = function () {
+      confirmThen(this, data.steps.length > 0 || !!data.title, "Clear everything? Click again", function () {
+        applyData({ title: "", credit: "", model: DEMO.model, steps: [] });
+      });
+    };
+    $("save").onclick = exportJson;
+    $("load").onclick = function () { $("jsonfile").click(); };
+    $("jsonfile").onchange = function () {
+      var f = this.files[0];
+      if (!f) return;
+      var r = new FileReader();
+      r.onload = function () {
+        try {
+          var d = JSON.parse(r.result);
+          if (!hasSteps(d)) throw new Error("no steps array");
+          applyData(d);
+        } catch (e) { alert("Could not read JSON: " + e.message); }
+      };
+      r.readAsText(f);
+      this.value = "";
+    };
+    // Publish: the unchanged demo goes to demo.html; any other exhibition opens in index.html as a published draft.
+    $("publish").onclick = function () {
+      if (sameAsDemo()) {
+        if (!window.open("demo.html", "_blank")) showOverlay(null);
+        return;
+      }
+      var override = localUrl && !isUrl(data.model.src) ? localUrl : null;
+      try {
+        localStorage.setItem("exh-published", JSON.stringify({ data: data, modelSrc: override }));
+      } catch (e) { showOverlay(override); return; }
+      if (!window.open("index.html?draft=1", "_blank")) showOverlay(override);
+    };
+    $("close").onclick = closePreview;
+
+    var saved = null;
+    try {
+      var d = JSON.parse(localStorage.getItem("exh-draft"));
+      if (hasSteps(d)) saved = d;
+    } catch (e) {}
+    applyData(saved || DEMO);
+  </script>
+</body>
+</html>
